@@ -150,7 +150,24 @@ def procesar_seleccion(call):
     bot.edit_message_text(mensaje_final, chat_id=chat_id, message_id=call.message.message_id, parse_mode="Markdown")
     
     del busquedas_usuarios[chat_id]
+# ... (tu código sigue exactamente igual hasta aquí) ...
 
+# 7. Servidor Web Falso (Para que Render nos deje usar la capa gratuita)
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+
+class Manejador(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"El bot esta funcionando OK")
+
+def iniciar_servidor():
+    # Render nos dira en que puerto escuchar a traves de la variable PORT
+    puerto = int(os.environ.get("PORT", 8080)) 
+    servidor = HTTPServer(('0.0.0.0', puerto), Manejador)
+    servidor.serve_forever()
 # 7. Iniciar Bot
 if __name__ == '__main__':
     print("Bot en ejecución...")
