@@ -31,27 +31,34 @@ def obtener_datos():
     """Descarga los datos solo si la caché ha caducado"""
     tiempo_actual = time.time()
     if cache['datos'] is None or (tiempo_actual - cache['ultima_actualizacion'] > TIEMPO_CACHE):
-        print("Descargando datos del Ministerio... ⏳")
+        print("Descargando datos del Ministerio... ⏳ (Puede tardar hasta 60s)")
         try:
-            # 1. Disfrazamos nuestro bot de Google Chrome
+            # Disfrazamos la petición al máximo para que el Ministerio crea que somos un navegador real
             cabeceras = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'es-ES,es;q=0.9',
+                'Connection': 'keep-alive',
+                'Referer': 'https://geoportalgasolineras.es/'
             }
             
-            # 2. Hacemos la petición con las cabeceras, un tiempo máximo de espera y verify=False
-            respuesta = requests.get(API_URL, headers=cabeceras, verify=False, timeout=15)
+            # AUMENTAMOS EL TIMEOUT A 60 SEGUNDOS
+            respuesta = requests.get(API_URL, headers=cabeceras, verify=False, timeout=60)
             
             # Comprobamos que la respuesta es 200 (OK)
             if respuesta.status_code == 200:
-                cache['datos'] = respuesta.json()['ListaEESSPrecio']
+                cache['datos'] = respuesta.json().get('ListaEESSPrecio', [])
                 cache['ultima_actualizacion'] = tiempo_actual
                 print("¡Datos descargados con éxito! ✅")
             else:
-                print(f"❌ La API devolvió un error: {respuesta.status_code}")
+                print(f"❌ La API devolvió un error HTTP: {respuesta.status_code}")
                 return None
                 
+        except requests.exceptions.Timeout:
+            print("❌ Error: El servidor del Ministerio ha tardado más de 60 segundos en responder (Timeout).")
+            return None
         except Exception as e:
-            # Si falla, imprimimos el error real en la consola para saber qué pasa
+            # Si falla, imprimimos el error real en la consola de Render
             print(f"❌ Error técnico al conectar: {e}")
             return None
             
