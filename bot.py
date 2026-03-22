@@ -40,28 +40,28 @@ def obtener_datos():
 def actualizar_datos_ministerio():
     """Esta función hace el trabajo pesado de descarga"""
     try:
-        print("Iniciando descarga masiva desde el Ministerio... ⏳")
+        print("Iniciando descarga masiva desde el Ministerio... ⏳ (Puede tardar hasta 90s)")
         cabeceras = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'application/json',
             'Referer': 'https://geoportalgasolineras.es/'
         }
-        # Quitamos verify=False para mayor seguridad y usamos 90 segundos de margen
-        respuesta = requests.get(API_URL, headers=cabeceras, timeout=90)
+        # ESTA ES LA LÍNEA 72: Asegúrate de que tenga exactamente 8 espacios antes de 'respuesta'
+        respuesta = requests.get(API_URL, headers=cabeceras, verify=False, timeout=90)
         
         if respuesta.status_code == 200:
             nuevos_datos = respuesta.json().get('ListaEESSPrecio', [])
             if nuevos_datos:
                 cache['datos'] = nuevos_datos
                 cache['ultima_actualizacion'] = time.time()
-                print(f"¡ÉXITO! {len(nuevos_datos)} gasolineras cargadas en caché. ✅")
+                print(f"¡ÉXITO! {len(nuevos_datos)} gasolineras cargadas en memoria. ✅")
                 return True
         else:
-            print(f"❌ Error HTTP del Ministerio: {respuesta.status_code}")
+            print(f"❌ La API del Ministerio respondió con error: {respuesta.status_code}")
     except Exception as e:
         print(f"❌ Error crítico en la descarga: {e}")
     return False
-
+    
 def bucle_actualizacion_continua():
     """Hilo secundario que actualiza los datos cada 30 minutos sin molestar"""
     while True:
