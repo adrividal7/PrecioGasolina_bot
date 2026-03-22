@@ -24,19 +24,38 @@ TIEMPO_CACHE = 1800 # 30 minutos
 busquedas_usuarios = {}
 
 # 3. Funciones Auxiliares
+# Asegúrate de tener 'import requests' y 'import time' arriba del todo
+
 def obtener_datos():
     """Descarga los datos solo si la caché ha caducado"""
     tiempo_actual = time.time()
     if cache['datos'] is None or (tiempo_actual - cache['ultima_actualizacion'] > TIEMPO_CACHE):
+        print("Descargando datos del Ministerio... ⏳")
         try:
-            respuesta = requests.get(API_URL)
-            cache['datos'] = respuesta.json()['ListaEESSPrecio']
-            cache['ultima_actualizacion'] = tiempo_actual
+            # 1. Disfrazamos nuestro bot de Google Chrome
+            cabeceras = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            
+            # 2. Hacemos la petición con las cabeceras, un tiempo máximo de espera y verify=False
+            respuesta = requests.get(API_URL, headers=cabeceras, verify=False, timeout=15)
+            
+            # Comprobamos que la respuesta es 200 (OK)
+            if respuesta.status_code == 200:
+                cache['datos'] = respuesta.json()['ListaEESSPrecio']
+                cache['ultima_actualizacion'] = tiempo_actual
+                print("¡Datos descargados con éxito! ✅")
+            else:
+                print(f"❌ La API devolvió un error: {respuesta.status_code}")
+                return None
+                
         except Exception as e:
-            print("Error al descargar datos:", e)
+            # Si falla, imprimimos el error real en la consola para saber qué pasa
+            print(f"❌ Error técnico al conectar: {e}")
             return None
+            
     return cache['datos']
-
+    
 def limpiar_precio(precio_str):
     """Convierte el precio de texto con coma a número decimal"""
     if not precio_str:
