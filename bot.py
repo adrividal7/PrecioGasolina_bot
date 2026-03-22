@@ -24,30 +24,36 @@ TIEMPO_CACHE = 1800 # 30 minutos
 # Diccionario para recordar las búsquedas y poder paginar
 busquedas_usuarios = {}
 
-# 3. Funciones Auxiliares
+import urllib3
+urllib3.disable_warnings() # Esto evita que los logs se llenen de advertencias por el verify=False
+
 def obtener_datos():
     """Descarga los datos solo si la caché ha caducado"""
     tiempo_actual = time.time()
     if cache['datos'] is None or (tiempo_actual - cache['ultima_actualizacion'] > TIEMPO_CACHE):
-        print("Descargando datos del Ministerio... ⏳")
+        print("Descargando datos del Ministerio... ⏳ (Esto puede tardar)")
         try:
-            # Cabeceras mejoradas para evitar bloqueos del Ministerio
             cabeceras = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Accept': 'application/json',
                 'Accept-Language': 'es-ES,es;q=0.9',
                 'Connection': 'keep-alive'
             }
-            # Aumentamos el timeout a 25 segundos porque la API del gobierno a veces es lenta
-            respuesta = requests.get(API_URL, headers=cabeceras, verify=False, timeout=25)
+            # Aumentamos el timeout a 60 segundos porque descargar toda España pesa bastante
+            respuesta = requests.get(API_URL, headers=cabeceras, verify=False, timeout=60)
             
             if respuesta.status_code == 200:
                 cache['datos'] = respuesta.json()['ListaEESSPrecio']
                 cache['ultima_actualizacion'] = tiempo_actual
                 print("¡Datos descargados con éxito! ✅")
             else:
-                print(f"❌ La API devolvió un error: {respuesta.status_code}")
+                # Si falla, imprimimos en los logs de Render el error exacto que da el gobierno
+                print(f"❌ La API devolvió un error: {respuesta.status_code} - {respuesta.text[:100]}")
                 return None
+                
+        except requests.exceptions.Timeout:
+            print("❌ Error: El servidor del Ministerio tardó demasiado en responder (Timeout).")
+            return None
         except Exception as e:
             print(f"❌ Error técnico al conectar: {e}")
             return None
@@ -275,4 +281,9 @@ def iniciar_servidor():
 
 # 11. Iniciar Bot
 if __name__ == '__main__':
+    # Arrancamos el servidor web falso para engañar a Render
     threading.Thread(target=iniciar_servidor, daemon=True).start()
+    
+    # Mantiene el script vivo y escuchando mensajes de Telegram
+    print("🤖 Servidor iniciado. Bot de Telegram escuchando...")
+    bot.infinity_polling()
