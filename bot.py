@@ -31,30 +31,27 @@ def obtener_datos():
     """Descarga los datos solo si la caché ha caducado"""
     tiempo_actual = time.time()
     if cache['datos'] is None or (tiempo_actual - cache['ultima_actualizacion'] > TIEMPO_CACHE):
-        print("Descargando datos del Ministerio... ⏳ (Esto puede tardar)")
+        print("Descargando datos del Ministerio... ⏳")
         try:
+            # 1. Disfrazamos nuestro bot de Google Chrome
             cabeceras = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Accept': 'application/json',
-                'Accept-Language': 'es-ES,es;q=0.9',
-                'Connection': 'keep-alive'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
-            # Aumentamos el timeout a 60 segundos porque descargar toda España pesa bastante
-            respuesta = requests.get(API_URL, headers=cabeceras, verify=False, timeout=60)
             
+            # 2. Hacemos la petición con las cabeceras, un tiempo máximo de espera y verify=False
+            respuesta = requests.get(API_URL, headers=cabeceras, verify=False, timeout=15)
+            
+            # Comprobamos que la respuesta es 200 (OK)
             if respuesta.status_code == 200:
                 cache['datos'] = respuesta.json()['ListaEESSPrecio']
                 cache['ultima_actualizacion'] = tiempo_actual
                 print("¡Datos descargados con éxito! ✅")
             else:
-                # Si falla, imprimimos en los logs de Render el error exacto que da el gobierno
-                print(f"❌ La API devolvió un error: {respuesta.status_code} - {respuesta.text[:100]}")
+                print(f"❌ La API devolvió un error: {respuesta.status_code}")
                 return None
                 
-        except requests.exceptions.Timeout:
-            print("❌ Error: El servidor del Ministerio tardó demasiado en responder (Timeout).")
-            return None
         except Exception as e:
+            # Si falla, imprimimos el error real en la consola para saber qué pasa
             print(f"❌ Error técnico al conectar: {e}")
             return None
             
