@@ -92,7 +92,7 @@ def preguntar_combustible(chat_id, message_id=None):
 # --- 5. RECEPCIÓN (EL CAMBIO IMPORTANTE ESTÁ AQUÍ) ---
 @bot.message_handler(commands=['start'])
 def bienvenida(message):
-    bot.reply_to(message, "¡Hola! ⛽️ Envíame tu **ubicación GPS**, un **lugar** o escribe una **calle/municipio**.")
+   bot.reply_to(message, "¡Hola! ⛽️ Envíame tu *ubicación GPS*, un *lugar* o escribe una *calle/municipio*.", parse_mode="Markdown")
 
 # AHORA ACEPTA 'LOCATION' Y 'VENUE' (Sitios específicos)
 @bot.message_handler(content_types=['location', 'venue'])
