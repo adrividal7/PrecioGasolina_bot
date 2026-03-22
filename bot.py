@@ -129,4 +129,114 @@ def recibir_texto(message):
 
 # --- 6. PROCESAMIENTO DE BÚSQUEDA ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith('dist_'))
-def set_
+def set_distancia(call):
+    chat_id = call.message.chat.id
+    if chat_id in busquedas_usuarios:
+        busquedas_usuarios[chat_id]['radio'] = float(call.data.split('_')[1])
+        preguntar_combustible(chat_id, call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('fuel_'))
+def procesar_y_buscar(call):
+    chat_id = call.message.chat.id
+    if chat_id not in busquedas_usuarios:
+        bot.answer_callback_query(call.id, "Error: Inicia la búsqueda de nuevo.")
+        return
+
+    tipo_f = call.data.replace('fuel_', '')
+    bot.edit_message_text("🔍 Buscando los mejores precios... esto tardará un segundo.", 
+                          chat_id=chat_id, message_id=call.message.message_id)
+    
+    datos = cache['datos']
+    if not datos:
+        bot.edit_message_text("❌ Los datos aún se están cargando. Prueba en 10 segundos.", 
+                              chat_id=chat_id, message_id=call.message.message_id)
+        return
+
+    busqueda = busquedas_usuarios[chat_id]
+    encontradas = []
+
+    for est in datos:
+        try:
+            # Limpiar y convertir precio
+            p_str = est[tipo_f].replace(',', '.')
+            if not p_str: continue
+            precio = float(p_str)
+            
+            lat_e = float(est['Latitud'].replace(',', '.'))
+            lon_e = float(est['Longitud (WGS84)'].replace(',', '.'))
+            
+            if busqueda['tipo'] == 'gps':
+                dist = calcular_distancia(busqueda['lat'], busqueda['lon'], lat_e, lon_e)
+                if dist <= busqueda['radio']:
+                    encontradas.append({'r': est['Rótulo'], 'p': precio, 'd': est['Dirección'], 'dist': dist, 'lat': lat_e, 'lon': lon_e})
+            else:
+                # Búsqueda por nombre de municipio o dirección
+                if busqueda['valor'] in est['Municipio'].upper() or busqueda['valor'] in est['Dirección'].upper():
+                    encontradas.append({'r': est['Rótulo'], 'p': precio, 'd': est['Dirección'], 'lat': lat_e, 'lon': lon_e})
+        except:
+            continue
+
+    encontradas.sort(key=lambda x: x['p'])
+    busqueda['res'] = encontradas
+    mostrar_resultados(chat_id, call.message.message_id, 0)
+
+def mostrar_resultados(chat_id, message_id, pagina):
+    res = busquedas_usuarios[chat_id].get('res', [])
+    if not res:
+        bot.edit_message_text("❌ No he encontrado gasolineras. Prueba con un radio mayor o revisa el nombre del municipio.", 
+                              chat_id=chat_id, message_id=message_id)
+        return
+
+    items_por_pag = 5
+    total_paginas = math.ceil(len(res) / items_por_pag)
+    inicio = pagina * items_por_pag
+    fin = inicio + items_por_pag
+    lista_actual = res[inicio:fin]
+    
+    txt = f"⛽️ *Gasolineras más baratas* (Pág {pagina+1}/{total_paginas}):\n\n"
+    for i, g in enumerate(lista_actual, 1):
+        dist_txt = f" | 📏 {g['dist']:.1f}km" if 'dist' in g else ""
+        # Enlace a Google Maps
+        map_link = f"https://www.google.com/maps/search/?api=1&query={g['lat']},{g['lon']}"
+        txt += f"{i}. *{g['p']}€* - [{g['r']}]({map_link}){dist_txt}\n📍 _{g['d']}_\n\n"
+
+    markup = InlineKeyboardMarkup()
+    btns = []
+    if pagina > 0:
+        btns.append(InlineKeyboardButton("⬅️ Anterior", callback_data=f"page_{pagina-1}"))
+    if pagina < total_paginas - 1:
+        btns.append(InlineKeyboardButton("Siguiente ➡️", callback_data=f"page_{pagina+1}"))
+    
+    if btns:
+        markup.add(*btns)
+    
+    bot.edit_message_text(txt, chat_id=chat_id, message_id=message_id, 
+                          parse_mode="Markdown", reply_markup=markup, disable_web_page_preview=True)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('page_'))
+def cambiar_pagina(call):
+    chat_id = call.message.chat.id
+    nueva_pag = int(call.data.split('_')[1])
+    mostrar_resultados(chat_id, call.message.message_id, nueva_pag)
+
+# --- 7. SERVIDOR WEB (KEEP-ALIVE PARA RENDER) ---
+class HealthCheck(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot Online")
+
+def ejecutar_servidor():
+    puerto = int(os.environ.get("PORT", 8080))
+    HTTPServer(('0.0.0.0', puerto), HealthCheck).serve_forever()
+
+# --- 8. ARRANQUE ---
+if __name__ == '__main__':
+    # Lanzar servidor web (Render necesita esto)
+    threading.Thread(target=ejecutar_servidor, daemon=True).start()
+    
+    # Lanzar actualizador de precios (Segundo plano)
+    threading.Thread(target=bucle_actualizacion_datos, daemon=True).start()
+    
+    print("🤖 El bot está funcionando. Esperando mensajes en Telegram...")
+    bot.infinity_polling()
