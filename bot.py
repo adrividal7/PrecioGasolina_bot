@@ -28,22 +28,48 @@ import urllib3
 urllib3.disable_warnings() # Esto evita que los logs se llenen de advertencias por el verify=False
 
 def obtener_datos():
-    """Descarga los datos solo si la caché ha caducado"""
-    tiempo_actual = time.time()
-    if cache['datos'] is None or (tiempo_actual - cache['ultima_actualizacion'] > TIEMPO_CACHE):
-        print("Descargando datos del Ministerio... ⏳ (Puede tardar hasta 60s)")
-        try:
-            # Disfrazamos la petición al máximo para que el Ministerio crea que somos un navegador real
-            cabeceras = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'es-ES,es;q=0.9',
-                'Connection': 'keep-alive',
-                'Referer': 'https://geoportalgasolineras.es/'
-            }
+    """Simplemente devuelve lo que hay en caché. Si está vacío, intenta descargar una vez."""
+    if cache['datos'] is not None:
+        return cache['datos']
+    
+    # Si la caché está vacía (ej. justo al arrancar), intentamos una descarga forzada
+    print("Caché vacía. Intentando descarga de emergencia...")
+    actualizar_datos_ministerio()
+    return cache['datos']
+
+def actualizar_datos_ministerio():
+    """Esta función hace el trabajo pesado de descarga"""
+    try:
+        print("Iniciando descarga masiva desde el Ministerio... ⏳")
+        cabeceras = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+            'Referer': 'https://geoportalgasolineras.es/'
+        }
+        # Quitamos verify=False para mayor seguridad y usamos 90 segundos de margen
+        respuesta = requests.get(API_URL, headers=cabeceras, timeout=90)
+        
+        if respuesta.status_code == 200:
+            nuevos_datos = respuesta.json().get('ListaEESSPrecio', [])
+            if nuevos_datos:
+                cache['datos'] = nuevos_datos
+                cache['ultima_actualizacion'] = time.time()
+                print(f"¡ÉXITO! {len(nuevos_datos)} gasolineras cargadas en caché. ✅")
+                return True
+        else:
+            print(f"❌ Error HTTP del Ministerio: {respuesta.status_code}")
+    except Exception as e:
+        print(f"❌ Error crítico en la descarga: {e}")
+    return False
+
+def bucle_actualizacion_continua():
+    """Hilo secundario que actualiza los datos cada 30 minutos sin molestar"""
+    while True:
+        actualizar_datos_ministerio()
+        time.sleep(TIEMPO_CACHE) # Espera 30 minutos
             
             # AUMENTAMOS EL TIMEOUT A 60 SEGUNDOS
-            respuesta = requests.get(API_URL, headers=cabeceras, verify=False, timeout=60)
+            respuesta = requests.get(API_URL, headers=cabeceras, verify=False, timeout=90)
             
             # Comprobamos que la respuesta es 200 (OK)
             if respuesta.status_code == 200:
@@ -282,12 +308,14 @@ def iniciar_servidor():
     puerto = int(os.environ.get("PORT", 8080)) 
     servidor = HTTPServer(('0.0.0.0', puerto), Manejador)
     servidor.serve_forever()
-
 # 11. Iniciar Bot
 if __name__ == '__main__':
-    # Arrancamos el servidor web falso para engañar a Render
+    # 1. Arrancar Servidor Web para Render
     threading.Thread(target=iniciar_servidor, daemon=True).start()
     
-    # Mantiene el script vivo y escuchando mensajes de Telegram
-    print("🤖 Servidor iniciado. Bot de Telegram escuchando...")
-    bot.infinity_polling()
+    # 2. Arrancar Hilo de actualización de datos (esto descarga los precios en segundo plano)
+    threading.Thread(target=bucle_actualizacion_continua, daemon=True).start()
+    
+    # 3. Iniciar el Bot de Telegram
+    print("🤖 Bot listo y descargando datos en segundo plano...")
+    bot.infinity_polling()infinity_polling()
