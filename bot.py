@@ -90,10 +90,16 @@ def preguntar_combustible(chat_id, message_id=None):
         bot.send_message(chat_id, txt, reply_markup=markup)
 
 # --- 5. RECEPCIÓN (EL CAMBIO IMPORTANTE ESTÁ AQUÍ) ---
-@bot.message_handler(commands=['start'])
+@bot.message_handler(commands=['start', 'help'])
 def bienvenida(message):
-   bot.reply_to(message, "¡Hola! ⛽️ Envíame tu *ubicación GPS*, un *lugar* o escribe una *calle/municipio*.", parse_mode="Markdown")
+    texto = """¡Hola! ⛽️ Soy tu buscador de gasolineras baratas.
 
+Puedes enviarme:
+1. 📍 Tu <b>ubicación actual</b> (usando el clip 📎 de Telegram).
+2. 🏠 Una <b>calle o sitio</b> (ej: Gran Vía 13, Madrid).
+3. 🏙 Un <b>municipio</b> (ej: Sevilla)"""
+    
+    bot.reply_to(message, texto, parse_mode="HTML")
 # AHORA ACEPTA 'LOCATION' Y 'VENUE' (Sitios específicos)
 @bot.message_handler(content_types=['location', 'venue'])
 def recibir_ubicacion_gps(message):
