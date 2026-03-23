@@ -56,6 +56,10 @@ def actualizar_datos_ministerio():
         if r.status_code == 200:
             datos_json = r.json()
             cache['datos'] = datos_json.get('ListaEESSPrecio', [])
+            
+            # NUEVO: Guardamos la fecha oficial que nos da el Ministerio
+            cache['fecha_ministerio'] = datos_json.get('Fecha', 'Desconocida') 
+            
             cache['ultima_actualizacion'] = time.time()
             print(f"✅ Datos cargados con éxito: {len(cache['datos'])} estaciones.")
             return True
@@ -222,7 +226,13 @@ def mostrar_resultados(chat_id, mid, pag):
     total = math.ceil(len(res) / items)
     lista = res[pag*items : (pag+1)*items]
     
-    txt = f"⛽️ *Resultados* (Pág {pag+1}/{total}):\n\n"
+    # NUEVO: Recuperamos la fecha del caché
+    fecha_oficial = cache.get('fecha_ministerio', 'Desconocida')
+    
+    # NUEVO: Añadimos la fecha al texto principal
+    txt = f"⛽️ *Resultados* (Pág {pag+1}/{total}):\n"
+    txt += f"🔄 _Precios del: {fecha_oficial}_\n\n"
+    
     for i, g in enumerate(lista, 1):
         dist = f" | 📏 {g['dist']:.1f}km" if 'dist' in g else ""
         map_link = f"https://www.google.com/maps/search/?api=1&query={g['lat']},{g['lon']}"
