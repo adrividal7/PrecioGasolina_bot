@@ -202,8 +202,27 @@ def paginar(call):
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
+    def do_HEAD(self): # Añadido para que UptimeRobot no de error 501
+        self.send_response(200); self.end_headers()
+
+def bucle_actualizacion():
+    while True:
+        time.sleep(TIEMPO_CACHE) # Espera 30 minutos
+        actualizar_datos_ministerio() # Vuelve a descargar
 
 if __name__ == '__main__':
+    # 1. Arrancamos el servidor para UptimeRobot
     threading.Thread(target=lambda: HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 8080))), Health).serve_forever(), daemon=True).start()
-    print("🤖 Bot listo con soporte para Venues y distancias 10-20-30km...")
+    
+    # 2. FORZAMOS la descarga inicial ANTES de que el bot empiece a contestar
+    print("⏳ Iniciando: Descargando datos iniciales desde GitHub...")
+    while not actualizar_datos_ministerio():
+        print("⚠️ Fallo al descargar. Reintentando en 10 segundos...")
+        time.sleep(10)
+        
+    # 3. Lanzamos el hilo que actualizará los datos en segundo plano cada 30 min
+    threading.Thread(target=bucle_actualizacion, daemon=True).start()
+
+    # 4. Encendemos el bot
+    print("🤖 Bot listo y escuchando mensajes...")
     bot.infinity_polling()
