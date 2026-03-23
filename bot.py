@@ -231,7 +231,7 @@ def mostrar_resultados(chat_id, mid, pag):
     
     # NUEVO: Añadimos la fecha al texto principal
     txt = f"⛽️ *Resultados* (Pág {pag+1}/{total}):\n"
-    txt += f"🔄 _Precios del: {fecha_oficial}_\n\n"
+    txt += f"💵​ _Precios del: {fecha_oficial}_\n\n"
     
     for i, g in enumerate(lista, 1):
         dist = f" | 📏 {g['dist']:.1f}km" if 'dist' in g else ""
@@ -271,6 +271,8 @@ if __name__ == '__main__':
         time.sleep(10)
         
     threading.Thread(target=bucle_actualizacion, daemon=True).start()
-
+    
+    bot.remove_webhook()
+    
     print("🤖 Bot listo y escuchando mensajes...")
     bot.infinity_polling()
