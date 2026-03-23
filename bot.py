@@ -25,19 +25,18 @@ cache = {'datos': None, 'ultima_actualizacion': 0}
 TIEMPO_CACHE = 1800 
 busquedas_usuarios = {}
 
-# --- 1. GEOLOCALIZACIÓN Y RUTAS ---
+# --- 1. GEOLOCALIZACIÓN ---
 def obtener_coordenadas(direccion):
-    """Busca hasta 5 coincidencias para una dirección dada."""
+    """Busca hasta 5 coincidencias para una dirección."""
     query = f"{direccion}, España" if "España" not in direccion else direccion
     url = f"https://nominatim.openstreetmap.org/search?q={query}&format=json&limit=5"
-    headers = {'User-Agent': f'GasolinerasBot_Rutas_{TOKEN[:5]}'}
+    headers = {'User-Agent': f'GasolinerasBot_Rapido_{TOKEN[:5]}'}
     try:
         r = requests.get(url, headers=headers, timeout=10)
         data = r.json()
         resultados = []
         if data:
             for item in data:
-                # Acortamos el nombre para que quepa bien en el botón de Telegram
                 nombre_corto = ", ".join(item.get('display_name', '').split(',')[0:3])
                 resultados.append({
                     'lat': float(item['lat']), 
@@ -49,39 +48,48 @@ def obtener_coordenadas(direccion):
         pass
     return []
 
-def obtener_distancia_coche(lat1, lon1, lat2, lon2):
-    """Calcula la distancia precisa por carretera (en km) usando OSRM."""
-    url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=false"
-    try:
-        r = requests.get(url, timeout=3)
-        if r.status_code == 200:
-            data = r.json()
-            if data and 'routes' in data and len(data['routes']) > 0:
-                return data['routes'][0]['distance'] / 1000.0
-    except:
-        pass
-    return None
-
-def calcular_distancia_recta(lat1, lon1, lat2, lon2):
-    """Calcula distancia rápida en línea recta como filtro previo."""
+def calcular_distancia(lat1, lon1, lat2, lon2):
+    """Calcula distancia en línea recta (Ultrarrápido)."""
     R = 6371.0
     dlat, dlon = math.radians(lat2-lat1), math.radians(lon2-lon1)
     a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
     return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1-a)))
 
-# --- 2. GESTIÓN DE DATOS ---
+# --- 2. GESTIÓN DE DATOS (SISTEMA ANTI-CUELGUES) ---
 def actualizar_datos_ministerio():
-    try:
-        print("📥 Actualizando base de datos... ⏳")
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        r = requests.get(API_URL, headers=headers, verify=False, timeout=120)
-        if r.status_code == 200:
-            cache['datos'] = r.json().get('ListaEESSPrecio', [])
-            cache['ultima_actualizacion'] = time.time()
-            print(f"✅ Datos cargados: {len(cache['datos'])} estaciones.")
-            return True
-    except Exception as e:
-        print(f"❌ Error Ministerio: {e}")
+    max_intentos = 3
+    
+    for intento in range(1, max_intentos + 1):
+        try:
+            print(f"📥 Actualizando base de datos... (Intento {intento}/{max_intentos}) ⏳")
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'application/json',
+                'Connection': 'keep-alive',
+                'Accept-Encoding': 'gzip, deflate, br'
+            }
+            
+            # Usar Session() mantiene la conexión viva y evita el "Connection reset by peer"
+            session = requests.Session()
+            r = session.get(API_URL, headers=headers, verify=False, timeout=120)
+            
+            if r.status_code == 200:
+                cache['datos'] = r.json().get('ListaEESSPrecio', [])
+                cache['ultima_actualizacion'] = time.time()
+                print(f"✅ ¡Éxito! Datos cargados: {len(cache['datos'])} estaciones.")
+                return True
+            else:
+                print(f"⚠️ El Ministerio devolvió un error HTTP: {r.status_code}")
+                
+        except Exception as e:
+            print(f"⚠️ Corte de conexión en el intento {intento}: {e}")
+            
+        if intento < max_intentos:
+            print("⏳ Esperando 10 segundos para reintentar...")
+            time.sleep(10)
+            
+    print("❌ Imposible descargar los datos del Ministerio tras 3 intentos.")
     return False
 
 def bucle_actualizacion():
@@ -97,7 +105,7 @@ def enviar_menu_distancia(chat_id, titulo="📍 <b>Ubicación recibida</b>"):
         InlineKeyboardButton("📍 20 km", callback_data="dist_20"),
         InlineKeyboardButton("📍 30 km", callback_data="dist_30")
     )
-    bot.send_message(chat_id, f"{titulo}\n\n¿A qué distancia máxima en coche buscamos?", 
+    bot.send_message(chat_id, f"{titulo}\n\n¿A qué distancia máxima buscamos?", 
                      reply_markup=markup, parse_mode="HTML")
 
 def preguntar_combustible(chat_id, message_id=None):
@@ -145,11 +153,9 @@ def recibir_texto(message):
     
     if opciones_coords:
         if len(opciones_coords) == 1:
-            # Si solo hay 1 coincidencia
             busquedas_usuarios[chat_id] = {'tipo': 'gps', 'lat': opciones_coords[0]['lat'], 'lon': opciones_coords[0]['lon']}
             enviar_menu_distancia(chat_id, f"📍 He localizado: <b>{html.escape(opciones_coords[0]['nombre'])}</b>")
         else:
-            # Selector de opciones múltiples
             markup = InlineKeyboardMarkup()
             for i, loc in enumerate(opciones_coords):
                 llave_temp = f"loc_{i}"
@@ -176,7 +182,7 @@ def seleccionar_opcion_calle(call):
     else:
         bot.answer_callback_query(call.id, "Búsqueda caducada. Repite tu búsqueda.")
 
-# --- 5. PROCESAMIENTO CON RUTAS PRECISAS ---
+# --- 5. PROCESAMIENTO ULTRARRÁPIDO ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith('dist_'))
 def set_distancia(call):
     chat_id = call.message.chat.id
@@ -190,18 +196,17 @@ def buscar(call):
     if chat_id not in busquedas_usuarios: return
 
     tipo_f = call.data.replace('fuel_', '')
-    bot.edit_message_text("🔍 Calculando rutas en coche y buscando precios... 🚗\n_(Esto tardará unos 2-3 segundos)_", 
+    bot.edit_message_text("🔍 Buscando los mejores precios... ⚡️", 
                           chat_id=chat_id, message_id=call.message.message_id, parse_mode="HTML")
     
     datos = cache['datos']
     if not datos:
-        bot.edit_message_text("❌ Datos no listos. Espera 10s.", chat_id=chat_id, message_id=call.message.message_id)
+        bot.edit_message_text("❌ Datos no listos. Espera unos segundos y vuelve a pulsar el botón.", chat_id=chat_id, message_id=call.message.message_id)
         return
 
     b = busquedas_usuarios[chat_id]
-    candidatas = []
+    encontradas = []
 
-    # PASO 1: Filtrar todas las gasolineras usando línea recta (para descartar el 99% de España rápido)
     for est in datos:
         try:
             p = float(est[tipo_f].replace(',', '.'))
@@ -209,50 +214,24 @@ def buscar(call):
             lon_e = float(est['Longitud (WGS84)'].replace(',', '.'))
             
             if b['tipo'] == 'gps':
-                dist_recta = calcular_distancia_recta(b['lat'], b['lon'], lat_e, lon_e)
-                if dist_recta <= (b['radio'] * 1.5): # Damos margen para curvas de carretera
-                    candidatas.append({'est': est, 'p': p, 'lat': lat_e, 'lon': lon_e, 'dist_recta': dist_recta})
+                dist = calcular_distancia(b['lat'], b['lon'], lat_e, lon_e)
+                # Como es línea recta, le damos un poco de margen para no perder gasolineras buenas
+                if dist <= (b['radio'] * 1.2):
+                    encontradas.append({'r': est['Rótulo'], 'p': p, 'd': est['Dirección'], 'dist': dist, 'lat': lat_e, 'lon': lon_e})
             else:
                 if b['valor'] in est['Municipio'].upper() or b['valor'] in est['Dirección'].upper():
-                    candidatas.append({'est': est, 'p': p, 'lat': lat_e, 'lon': lon_e})
+                    encontradas.append({'r': est['Rótulo'], 'p': p, 'd': est['Dirección'], 'lat': lat_e, 'lon': lon_e})
         except: continue
-
-    encontradas = []
-
-    # PASO 2: Calcular distancia REAL por carretera
-    if b['tipo'] == 'gps':
-        candidatas.sort(key=lambda x: x['dist_recta'])
-        
-        # Consultamos las rutas de las 12 más cercanas para no bloquear la API y agilizar
-        for c in candidatas[:12]:
-            dist_coche = obtener_distancia_coche(b['lat'], b['lon'], c['lat'], c['lon'])
-            
-            if dist_coche is not None:
-                dist_final = dist_coche
-                icono_dist = "🚗" # Marca que es ruta por coche
-            else:
-                dist_final = c['dist_recta']
-                icono_dist = "📏" # Marca que es línea recta si falló el servidor de rutas
-                
-            time.sleep(0.1) # Micropausa de seguridad
-            
-            if dist_final <= b['radio']:
-                encontradas.append({
-                    'r': c['est']['Rótulo'], 'p': c['p'], 'd': c['est']['Dirección'], 
-                    'dist': dist_final, 'lat': c['lat'], 'lon': c['lon'], 'icono': icono_dist
-                })
-    else:
-        for c in candidatas:
-            encontradas.append({'r': c['est']['Rótulo'], 'p': c['p'], 'd': c['est']['Dirección'], 'lat': c['lat'], 'lon': c['lon']})
 
     encontradas.sort(key=lambda x: x['p'])
     b['res'] = encontradas
     mostrar_resultados(chat_id, call.message.message_id, 0)
 
 def mostrar_resultados(chat_id, mid, pag):
-    res = busquedas_usuarios[chat_id].get('res', [])
+    b = busquedas_usuarios[chat_id]
+    res = b.get('res', [])
     if not res:
-        bot.edit_message_text("❌ No hay nada en ese radio (en coche). Prueba más km.", chat_id=chat_id, message_id=mid, parse_mode="HTML")
+        bot.edit_message_text("❌ No hay gasolineras en ese radio. Prueba ampliar los km.", chat_id=chat_id, message_id=mid, parse_mode="HTML")
         return
 
     items = 5
@@ -261,11 +240,13 @@ def mostrar_resultados(chat_id, mid, pag):
     
     txt = f"⛽️ <b>Resultados más baratos</b> (Pág {pag+1}/{total}):\n\n"
     for i, g in enumerate(lista, 1):
-        icono = g.get('icono', '')
-        dist = f" | {icono} <b>{g['dist']:.1f} km</b>" if 'dist' in g else ""
+        dist = f" | 📏 <b>{g['dist']:.1f} km</b>" if 'dist' in g else ""
         
-        # Enlace para que Google Maps trace la ruta en el móvil del usuario
-        map_link = f"https://www.google.com/maps/search/?api=1&query={g['lat']},{g['lon']}"
+        # EL TRUCO DE RUTAS: Enlace oficial de Google Maps para forzar la navegación
+        if b['tipo'] == 'gps':
+            map_link = f"https://www.google.com/maps/dir/?api=1&origin={b['lat']},{b['lon']}&destination={g['lat']},{g['lon']}"
+        else:
+            map_link = f"https://www.google.com/maps/search/?api=1&query={g['lat']},{g['lon']}"
         
         rotulo = html.escape(g['r'])
         dir_segura = html.escape(g['d'])
@@ -274,8 +255,8 @@ def mostrar_resultados(chat_id, mid, pag):
 
     markup = InlineKeyboardMarkup()
     btns = []
-    if pag > 0: btns.append(InlineKeyboardButton("⬅️", callback_data=f"page_{pag-1}"))
-    if pag < total - 1: btns.append(InlineKeyboardButton("➡️", callback_data=f"page_{pag+1}"))
+    if pag > 0: btns.append(InlineKeyboardButton("⬅️ Anterior", callback_data=f"page_{pag-1}"))
+    if pag < total - 1: btns.append(InlineKeyboardButton("Siguiente ➡️", callback_data=f"page_{pag+1}"))
     if btns: markup.add(*btns)
     
     bot.edit_message_text(txt, chat_id=chat_id, message_id=mid, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
@@ -292,5 +273,5 @@ class Health(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     threading.Thread(target=lambda: HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 8080))), Health).serve_forever(), daemon=True).start()
     threading.Thread(target=bucle_actualizacion, daemon=True).start()
-    print("🤖 Bot listo con rutas de coche precisas (OSRM), selectores múltiples y HTML...")
+    print("🤖 Bot listo: Anti-cuelgues + Rutas Rápidas Google Maps + HTML...")
     bot.infinity_polling()
