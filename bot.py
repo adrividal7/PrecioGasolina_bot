@@ -251,6 +251,9 @@ def paginar(call):
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
 
 if __name__ == '__main__':
     # Lanzamos el servidor de HealthCheck para evitar caídas en el hosting
