@@ -25,14 +25,24 @@ TIEMPO_CACHE = 1800
 busquedas_usuarios = {}
 
 # --- 1. GEOLOCALIZACIÓN (Para texto) ---
-def obtener_coordenadas(direccion):
-    url = f"https://nominatim.openstreetmap.org/search?q={direccion}, España&format=json&limit=1"
+def obtener_coordenadas(direccion, limite=5):
+    # Pedimos hasta 5 resultados
+    url = f"https://nominatim.openstreetmap.org/search?q={direccion}, España&format=json&limit={limite}"
     headers = {'User-Agent': f'GasolinerasBot_Final_{TOKEN[:5]}'}
     try:
         r = requests.get(url, headers=headers, timeout=10)
         data = r.json()
         if data:
-            return float(data[0]['lat']), float(data[0]['lon'])
+            resultados = []
+            for item in data:
+                # Acortamos el nombre para que quede limpio en los botones
+                nombre_corto = item.get('display_name', '').replace(', España', '')
+                resultados.append({
+                    'lat': float(item['lat']),
+                    'lon': float(item['lon']),
+                    'nombre': nombre_corto
+                })
+            return resultados
     except:
         pass
     return None
@@ -41,11 +51,9 @@ def obtener_coordenadas(direccion):
 def actualizar_datos_ministerio():
     try:
         print("📥 Descargando base de datos desde GitHub... ⏳")
-        # Ya no necesitamos cabeceras raras, GitHub nos deja pasar siempre
         r = requests.get(API_URL, timeout=30)
         
         if r.status_code == 200:
-            # OJO: Aquí cambia un poco porque el JSON de GitHub es directamente la lista o el diccionario completo
             datos_json = r.json()
             cache['datos'] = datos_json.get('ListaEESSPrecio', [])
             cache['ultima_actualizacion'] = time.time()
@@ -67,7 +75,6 @@ def calcular_distancia(lat1, lon1, lat2, lon2):
 # --- 4. MENÚS ---
 def enviar_menu_distancia(chat_id, titulo="📍 Ubicación recibida"):
     markup = InlineKeyboardMarkup()
-    # UNIFICADO A 10, 20, 30 KM
     markup.add(
         InlineKeyboardButton("📍 10 km", callback_data="dist_10"),
         InlineKeyboardButton("📍 20 km", callback_data="dist_20"),
@@ -89,7 +96,7 @@ def preguntar_combustible(chat_id, message_id=None):
     else:
         bot.send_message(chat_id, txt, reply_markup=markup)
 
-# --- 5. RECEPCIÓN (EL CAMBIO IMPORTANTE ESTÁ AQUÍ) ---
+# --- 5. RECEPCIÓN DE MENSAJES ---
 @bot.message_handler(commands=['start', 'help'])
 def bienvenida(message):
     texto = """¡Hola! ⛽️ Soy tu buscador de gasolineras baratas.
@@ -100,11 +107,9 @@ Puedes enviarme:
 3. 🏙 Un <b>municipio</b> (ej: <i>Sevilla</i>)."""
     bot.reply_to(message, texto, parse_mode="HTML")
     
-# AHORA ACEPTA 'LOCATION' Y 'VENUE' (Sitios específicos)
 @bot.message_handler(content_types=['location', 'venue'])
 def recibir_ubicacion_gps(message):
     chat_id = message.chat.id
-    # Extraemos lat/lon sea cual sea el tipo de mensaje de mapa
     if message.location:
         lat, lon = message.location.latitude, message.location.longitude
     elif message.venue:
@@ -119,15 +124,52 @@ def recibir_texto(message):
     texto = message.text
     bot.send_chat_action(chat_id, 'find_location')
     
-    coords = obtener_coordenadas(texto)
-    if coords:
-        busquedas_usuarios[chat_id] = {'tipo': 'gps', 'lat': coords[0], 'lon': coords[1]}
-        enviar_menu_distancia(chat_id, f"📍 He localizado: *{texto}*")
+    resultados = obtener_coordenadas(texto)
+    
+    if resultados:
+        if len(resultados) == 1:
+            # Va directo si solo hay 1 coincidencia
+            busquedas_usuarios[chat_id] = {'tipo': 'gps', 'lat': resultados[0]['lat'], 'lon': resultados[0]['lon']}
+            enviar_menu_distancia(chat_id, f"📍 He localizado: *{resultados[0]['nombre']}*")
+        else:
+            # Si hay varias opciones, genera botones interactivos
+            busquedas_usuarios[chat_id] = {'tipo': 'seleccion', 'opciones': resultados}
+            markup = InlineKeyboardMarkup()
+            for i, res in enumerate(resultados):
+                # Cortamos el texto a 40 caracteres para que los botones no den error en Telegram
+                btn_txt = res['nombre'][:40] + "..." if len(res['nombre']) > 40 else res['nombre']
+                markup.add(InlineKeyboardButton(f"🏠 {btn_txt}", callback_data=f"addr_{i}"))
+            
+            bot.send_message(chat_id, f"He encontrado varias opciones para *{texto}*.\n¿Cuál es la correcta?", reply_markup=markup, parse_mode="Markdown")
     else:
+        # Búsqueda tradicional si falla el GPS
         busquedas_usuarios[chat_id] = {'tipo': 'texto', 'valor': texto.upper()}
         preguntar_combustible(chat_id)
 
-# --- 6. PROCESAMIENTO ---
+# --- 6. PROCESAMIENTO Y BOTONERAS ---
+
+# Este es el manejador de la selección de dirección
+@bot.callback_query_handler(func=lambda call: call.data.startswith('addr_'))
+def seleccionar_direccion(call):
+    chat_id = call.message.chat.id
+    
+    if chat_id not in busquedas_usuarios or busquedas_usuarios[chat_id].get('tipo') != 'seleccion':
+        bot.answer_callback_query(call.id, "❌ Búsqueda caducada. Escribe la dirección de nuevo.")
+        return
+
+    idx = int(call.data.split('_')[1])
+    opciones = busquedas_usuarios[chat_id]['opciones']
+    
+    if idx < len(opciones):
+        seleccion = opciones[idx]
+        busquedas_usuarios[chat_id] = {'tipo': 'gps', 'lat': seleccion['lat'], 'lon': seleccion['lon']}
+        
+        bot.edit_message_text(f"✅ Has seleccionado:\n*{seleccion['nombre']}*", 
+                              chat_id=chat_id, message_id=call.message.message_id, parse_mode="Markdown")
+        enviar_menu_distancia(chat_id)
+    else:
+        bot.answer_callback_query(call.id, "❌ Error al seleccionar.")
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith('dist_'))
 def set_distancia(call):
     chat_id = call.message.chat.id
@@ -145,7 +187,7 @@ def buscar(call):
     
     datos = cache['datos']
     if not datos:
-        bot.edit_message_text("❌ Datos no listos. Espera 10s.", chat_id=chat_id, message_id=call.message.message_id)
+        bot.edit_message_text("❌ Datos no listos. Espera unos segundos.", chat_id=chat_id, message_id=call.message.message_id)
         return
 
     b = busquedas_usuarios[chat_id]
@@ -173,7 +215,7 @@ def buscar(call):
 def mostrar_resultados(chat_id, mid, pag):
     res = busquedas_usuarios[chat_id].get('res', [])
     if not res:
-        bot.edit_message_text("❌ No hay nada en ese radio. Prueba con 20 o 30 km.", chat_id=chat_id, message_id=mid)
+        bot.edit_message_text("❌ No hay gasolineras con ese combustible en la zona.", chat_id=chat_id, message_id=mid)
         return
 
     items = 5
@@ -202,27 +244,23 @@ def paginar(call):
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
-    def do_HEAD(self): # Añadido para que UptimeRobot no de error 501
+    def do_HEAD(self):
         self.send_response(200); self.end_headers()
 
 def bucle_actualizacion():
     while True:
-        time.sleep(TIEMPO_CACHE) # Espera 30 minutos
-        actualizar_datos_ministerio() # Vuelve a descargar
+        time.sleep(TIEMPO_CACHE)
+        actualizar_datos_ministerio()
 
 if __name__ == '__main__':
-    # 1. Arrancamos el servidor para UptimeRobot
     threading.Thread(target=lambda: HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 8080))), Health).serve_forever(), daemon=True).start()
     
-    # 2. FORZAMOS la descarga inicial ANTES de que el bot empiece a contestar
     print("⏳ Iniciando: Descargando datos iniciales desde GitHub...")
     while not actualizar_datos_ministerio():
         print("⚠️ Fallo al descargar. Reintentando en 10 segundos...")
         time.sleep(10)
         
-    # 3. Lanzamos el hilo que actualizará los datos en segundo plano cada 30 min
     threading.Thread(target=bucle_actualizacion, daemon=True).start()
 
-    # 4. Encendemos el bot
     print("🤖 Bot listo y escuchando mensajes...")
     bot.infinity_polling()
