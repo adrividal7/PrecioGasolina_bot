@@ -96,10 +96,10 @@ def bienvenida(message):
 
 Puedes enviarme:
 1. 📍 Tu <b>ubicación actual</b> (usando el clip 📎 de Telegram).
-2. 🏠 Una <b>calle o sitio</b> (ej: Gran Vía 13, Madrid).
-3. 🏙 Un <b>municipio</b> (ej: Sevilla)"""
-    
+2. 🏠 Una <b>calle o sitio</b> (ej: <i>Gran Vía, Madrid</i>).
+3. 🏙 Un <b>municipio</b> (ej: <i>Sevilla</i>)."""
     bot.reply_to(message, texto, parse_mode="HTML")
+    
 # AHORA ACEPTA 'LOCATION' Y 'VENUE' (Sitios específicos)
 @bot.message_handler(content_types=['location', 'venue'])
 def recibir_ubicacion_gps(message):
