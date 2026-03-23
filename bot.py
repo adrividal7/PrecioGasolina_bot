@@ -6,7 +6,6 @@ import math
 import os
 import threading
 import urllib3
-import html
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # Configuración de seguridad
@@ -25,35 +24,18 @@ cache = {'datos': None, 'ultima_actualizacion': 0}
 TIEMPO_CACHE = 1800 
 busquedas_usuarios = {}
 
-# --- 1. GEOLOCALIZACIÓN ---
+# --- 1. GEOLOCALIZACIÓN (Para texto) ---
 def obtener_coordenadas(direccion):
-    """Busca hasta 5 coincidencias para una dirección."""
-    query = f"{direccion}, España" if "España" not in direccion else direccion
-    url = f"https://nominatim.openstreetmap.org/search?q={query}&format=json&limit=5"
-    headers = {'User-Agent': f'GasolinerasBot_Rapido_{TOKEN[:5]}'}
+    url = f"https://nominatim.openstreetmap.org/search?q={direccion}, España&format=json&limit=1"
+    headers = {'User-Agent': f'GasolinerasBot_Final_{TOKEN[:5]}'}
     try:
         r = requests.get(url, headers=headers, timeout=10)
         data = r.json()
-        resultados = []
         if data:
-            for item in data:
-                nombre_corto = ", ".join(item.get('display_name', '').split(',')[0:3])
-                resultados.append({
-                    'lat': float(item['lat']), 
-                    'lon': float(item['lon']),
-                    'nombre': nombre_corto
-                })
-        return resultados
+            return float(data[0]['lat']), float(data[0]['lon'])
     except:
         pass
-    return []
-
-def calcular_distancia(lat1, lon1, lat2, lon2):
-    """Calcula distancia en línea recta (Ultrarrápido)."""
-    R = 6371.0
-    dlat, dlon = math.radians(lat2-lat1), math.radians(lon2-lon1)
-    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
-    return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1-a)))
+    return None
 
 # --- 2. GESTIÓN DE DATOS ---
 def actualizar_datos_ministerio():
@@ -75,16 +57,24 @@ def bucle_actualizacion():
         actualizar_datos_ministerio()
         time.sleep(TIEMPO_CACHE)
 
-# --- 3. MENÚS ---
-def enviar_menu_distancia(chat_id, titulo="📍 <b>Ubicación recibida</b>"):
+# --- 3. CÁLCULO DISTANCIA ---
+def calcular_distancia(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    dlat, dlon = math.radians(lat2-lat1), math.radians(lon2-lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1-a)))
+
+# --- 4. MENÚS ---
+def enviar_menu_distancia(chat_id, titulo="📍 Ubicación recibida"):
     markup = InlineKeyboardMarkup()
+    # UNIFICADO A 10, 20, 30 KM
     markup.add(
         InlineKeyboardButton("📍 10 km", callback_data="dist_10"),
         InlineKeyboardButton("📍 20 km", callback_data="dist_20"),
         InlineKeyboardButton("📍 30 km", callback_data="dist_30")
     )
-    bot.send_message(chat_id, f"{titulo}\n\n¿A qué distancia máxima buscamos?", 
-                     reply_markup=markup, parse_mode="HTML")
+    bot.send_message(chat_id, f"{titulo}\n\n¿A qué distancia máxima quieres buscar?", 
+                     reply_markup=markup, parse_mode="Markdown")
 
 def preguntar_combustible(chat_id, message_id=None):
     markup = InlineKeyboardMarkup()
@@ -95,11 +85,11 @@ def preguntar_combustible(chat_id, message_id=None):
     )
     txt = "Selecciona el combustible:"
     if message_id:
-        bot.edit_message_text(txt, chat_id=chat_id, message_id=message_id, reply_markup=markup, parse_mode="HTML")
+        bot.edit_message_text(txt, chat_id=chat_id, message_id=message_id, reply_markup=markup)
     else:
-        bot.send_message(chat_id, txt, reply_markup=markup, parse_mode="HTML")
+        bot.send_message(chat_id, txt, reply_markup=markup)
 
-# --- 4. RECEPCIÓN ---
+# --- 5. RECEPCIÓN (EL CAMBIO IMPORTANTE ESTÁ AQUÍ) ---
 @bot.message_handler(commands=['start', 'help'])
 def bienvenida(message):
     texto = """¡Hola! ⛽️ Soy tu buscador de gasolineras baratas.
@@ -109,17 +99,19 @@ Puedes enviarme:
 2. 🏠 Una <b>calle o sitio</b> (ej: <i>Gran Vía, Madrid</i>).
 3. 🏙 Un <b>municipio</b> (ej: <i>Sevilla</i>)."""
     bot.reply_to(message, texto, parse_mode="HTML")
-
+    
+# AHORA ACEPTA 'LOCATION' Y 'VENUE' (Sitios específicos)
 @bot.message_handler(content_types=['location', 'venue'])
 def recibir_ubicacion_gps(message):
     chat_id = message.chat.id
+    # Extraemos lat/lon sea cual sea el tipo de mensaje de mapa
     if message.location:
         lat, lon = message.location.latitude, message.location.longitude
     elif message.venue:
         lat, lon = message.venue.location.latitude, message.venue.location.longitude
     
     busquedas_usuarios[chat_id] = {'tipo': 'gps', 'lat': lat, 'lon': lon}
-    enviar_menu_distancia(chat_id, "📍 <b>Ubicación detectada correctamente</b>")
+    enviar_menu_distancia(chat_id, "📍 *Ubicación detectada correctamente*")
 
 @bot.message_handler(content_types=['text'])
 def recibir_texto(message):
@@ -127,40 +119,15 @@ def recibir_texto(message):
     texto = message.text
     bot.send_chat_action(chat_id, 'find_location')
     
-    opciones_coords = obtener_coordenadas(texto)
-    
-    if opciones_coords:
-        if len(opciones_coords) == 1:
-            busquedas_usuarios[chat_id] = {'tipo': 'gps', 'lat': opciones_coords[0]['lat'], 'lon': opciones_coords[0]['lon']}
-            enviar_menu_distancia(chat_id, f"📍 He localizado: <b>{html.escape(opciones_coords[0]['nombre'])}</b>")
-        else:
-            markup = InlineKeyboardMarkup()
-            for i, loc in enumerate(opciones_coords):
-                llave_temp = f"loc_{i}"
-                busquedas_usuarios[f"{chat_id}_{llave_temp}"] = loc 
-                markup.add(InlineKeyboardButton(loc['nombre'], callback_data=llave_temp))
-            
-            bot.send_message(chat_id, f"🔎 He encontrado varias opciones para <b>{html.escape(texto)}</b>.\nElige la correcta:", 
-                             reply_markup=markup, parse_mode="HTML")
+    coords = obtener_coordenadas(texto)
+    if coords:
+        busquedas_usuarios[chat_id] = {'tipo': 'gps', 'lat': coords[0], 'lon': coords[1]}
+        enviar_menu_distancia(chat_id, f"📍 He localizado: *{texto}*")
     else:
         busquedas_usuarios[chat_id] = {'tipo': 'texto', 'valor': texto.upper()}
         preguntar_combustible(chat_id)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('loc_'))
-def seleccionar_opcion_calle(call):
-    chat_id = call.message.chat.id
-    llave = f"{chat_id}_{call.data}"
-    
-    if llave in busquedas_usuarios:
-        seleccion = busquedas_usuarios[llave]
-        busquedas_usuarios[chat_id] = {'tipo': 'gps', 'lat': seleccion['lat'], 'lon': seleccion['lon']}
-        bot.edit_message_text(f"📍 Seleccionado: <b>{html.escape(seleccion['nombre'])}</b>", 
-                              chat_id=chat_id, message_id=call.message.message_id, parse_mode="HTML")
-        enviar_menu_distancia(chat_id)
-    else:
-        bot.answer_callback_query(call.id, "Búsqueda caducada. Repite tu búsqueda.")
-
-# --- 5. PROCESAMIENTO ULTRARRÁPIDO ---
+# --- 6. PROCESAMIENTO ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith('dist_'))
 def set_distancia(call):
     chat_id = call.message.chat.id
@@ -174,8 +141,7 @@ def buscar(call):
     if chat_id not in busquedas_usuarios: return
 
     tipo_f = call.data.replace('fuel_', '')
-    bot.edit_message_text("🔍 Buscando los mejores precios... ⚡️", 
-                          chat_id=chat_id, message_id=call.message.message_id, parse_mode="HTML")
+    bot.edit_message_text("🔍 Buscando precios...", chat_id=chat_id, message_id=call.message.message_id)
     
     datos = cache['datos']
     if not datos:
@@ -193,8 +159,7 @@ def buscar(call):
             
             if b['tipo'] == 'gps':
                 dist = calcular_distancia(b['lat'], b['lon'], lat_e, lon_e)
-                # Como es línea recta, le damos un poco de margen para no perder gasolineras buenas
-                if dist <= (b['radio'] * 1.2):
+                if dist <= b['radio']:
                     encontradas.append({'r': est['Rótulo'], 'p': p, 'd': est['Dirección'], 'dist': dist, 'lat': lat_e, 'lon': lon_e})
             else:
                 if b['valor'] in est['Municipio'].upper() or b['valor'] in est['Dirección'].upper():
@@ -206,30 +171,20 @@ def buscar(call):
     mostrar_resultados(chat_id, call.message.message_id, 0)
 
 def mostrar_resultados(chat_id, mid, pag):
-    b = busquedas_usuarios[chat_id]
-    res = b.get('res', [])
+    res = busquedas_usuarios[chat_id].get('res', [])
     if not res:
-        bot.edit_message_text("❌ No hay gasolineras en ese radio. Prueba ampliar los km.", chat_id=chat_id, message_id=mid)
+        bot.edit_message_text("❌ No hay nada en ese radio. Prueba con 20 o 30 km.", chat_id=chat_id, message_id=mid)
         return
 
     items = 5
     total = math.ceil(len(res) / items)
     lista = res[pag*items : (pag+1)*items]
     
-    txt = f"⛽️ <b>Resultados más baratos</b> (Pág {pag+1}/{total}):\n\n"
+    txt = f"⛽️ *Resultados* (Pág {pag+1}/{total}):\n\n"
     for i, g in enumerate(lista, 1):
-        dist = f" | 📏 <b>{g['dist']:.1f} km</b>" if 'dist' in g else ""
-        
-        # EL TRUCO DE RUTAS: Creamos un enlace de "Direcciones" en lugar de un pin normal
-        if b['tipo'] == 'gps':
-            map_link = f"https://www.google.com/maps/dir/?api=1&origin={b['lat']},{b['lon']}&destination={g['lat']},{g['lon']}"
-        else:
-            map_link = f"https://www.google.com/maps/search/?api=1&query={g['lat']},{g['lon']}"
-        
-        rotulo = html.escape(g['r'])
-        dir_segura = html.escape(g['d'])
-        
-        txt += f"{i}. <b>{g['p']}€</b> - <a href='{map_link}'>{rotulo}</a>{dist}\n📍 <i>{dir_segura}</i>\n\n"
+        dist = f" | 📏 {g['dist']:.1f}km" if 'dist' in g else ""
+        map_link = f"https://www.google.com/maps/search/?api=1&query={g['lat']},{g['lon']}"
+        txt += f"{i}. *{g['p']}€* - [{g['r']}]({map_link}){dist}\n📍 _{g['d']}_\n\n"
 
     markup = InlineKeyboardMarkup()
     btns = []
@@ -237,13 +192,13 @@ def mostrar_resultados(chat_id, mid, pag):
     if pag < total - 1: btns.append(InlineKeyboardButton("➡️", callback_data=f"page_{pag+1}"))
     if btns: markup.add(*btns)
     
-    bot.edit_message_text(txt, chat_id=chat_id, message_id=mid, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
+    bot.edit_message_text(txt, chat_id=chat_id, message_id=mid, parse_mode="Markdown", reply_markup=markup, disable_web_page_preview=True)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('page_'))
 def paginar(call):
     mostrar_resultados(call.message.chat.id, call.message.message_id, int(call.data.split('_')[1]))
 
-# --- 6. WEB SERVER Y ARRANQUE ---
+# --- 7. WEB SERVER Y ARRANQUE ---
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
@@ -251,5 +206,5 @@ class Health(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     threading.Thread(target=lambda: HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 8080))), Health).serve_forever(), daemon=True).start()
     threading.Thread(target=bucle_actualizacion, daemon=True).start()
-    print("🤖 Bot listo: Rápido (Línea recta) + Rutas de Google Maps automáticas...")
+    print("🤖 Bot listo con soporte para Venues y distancias 10-20-30km...")
     bot.infinity_polling()
