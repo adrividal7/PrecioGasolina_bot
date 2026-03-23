@@ -205,6 +205,5 @@ class Health(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     threading.Thread(target=lambda: HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 8080))), Health).serve_forever(), daemon=True).start()
-    threading.Thread(target=bucle_actualizacion, daemon=True).start()
     print("🤖 Bot listo con soporte para Venues y distancias 10-20-30km...")
     bot.infinity_polling()
