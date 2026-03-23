@@ -17,7 +17,7 @@ if not TOKEN:
     exit()
 
 bot = telebot.TeleBot(TOKEN)
-API_URL = "https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/"
+API_URL = "https://raw.githubusercontent.com/adrividal7/Datos-Gasolinera/refs/heads/main/datos.json"
 
 # Memoria del bot
 cache = {'datos': None, 'ultima_actualizacion': 0}
@@ -40,22 +40,22 @@ def obtener_coordenadas(direccion):
 # --- 2. GESTIÓN DE DATOS ---
 def actualizar_datos_ministerio():
     try:
-        print("📥 Actualizando base de datos... ⏳")
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        r = requests.get(API_URL, headers=headers, verify=False, timeout=120)
+        print("📥 Descargando base de datos desde GitHub... ⏳")
+        # Ya no necesitamos cabeceras raras, GitHub nos deja pasar siempre
+        r = requests.get(API_URL, timeout=30)
+        
         if r.status_code == 200:
-            cache['datos'] = r.json().get('ListaEESSPrecio', [])
+            # OJO: Aquí cambia un poco porque el JSON de GitHub es directamente la lista o el diccionario completo
+            datos_json = r.json()
+            cache['datos'] = datos_json.get('ListaEESSPrecio', [])
             cache['ultima_actualizacion'] = time.time()
-            print(f"✅ Datos cargados: {len(cache['datos'])} estaciones.")
+            print(f"✅ Datos cargados con éxito: {len(cache['datos'])} estaciones.")
             return True
+        else:
+            print(f"⚠️ Error. GitHub devolvió el código {r.status_code}")
     except Exception as e:
-        print(f"❌ Error Ministerio: {e}")
+        print(f"❌ Error conectando con GitHub: {e}")
     return False
-
-def bucle_actualizacion():
-    while True:
-        actualizar_datos_ministerio()
-        time.sleep(TIEMPO_CACHE)
 
 # --- 3. CÁLCULO DISTANCIA ---
 def calcular_distancia(lat1, lon1, lat2, lon2):
