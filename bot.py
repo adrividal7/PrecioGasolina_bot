@@ -91,8 +91,8 @@ def preguntar_combustible(chat_id, message_id=None):
     markup = InlineKeyboardMarkup()
     markup.add(
         InlineKeyboardButton("⛽️ 95", callback_data="fuel_Precio Gasolina 95 E5"),
-        InlineKeyboardButton("🛢 Diésel", callback_data="fuel_Precio Gasoleo A"),
-        InlineKeyboardButton("🚀 98", callback_data="fuel_Precio Gasolina 98 E5")
+        InlineKeyboardButton("🚀 98", callback_data="fuel_Precio Gasolina 98 E5"),
+        InlineKeyboardButton("🛢 Diésel", callback_data="fuel_Precio Gasoleo A")
     )
     txt = "Selecciona el combustible:"
     if message_id:
