@@ -271,7 +271,18 @@ class Health(BaseHTTPRequestHandler):
         self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
 
 if __name__ == '__main__':
+    # 1. Arrancamos el servidor web para que Render no se queje
     threading.Thread(target=lambda: HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 8080))), Health).serve_forever(), daemon=True).start()
+    
+    # 2. DESCARGA FORZADA: El bot no arranca hasta intentar descargar los datos al menos una vez
+    print("⚙️ Descargando datos iniciales del Ministerio. Por favor, espera...")
+    exito = actualizar_datos_ministerio()
+    if not exito:
+        print("⚠️ CUIDADO: El bot no ha podido descargar los datos. Es posible que el Ministerio esté bloqueando la IP de Render.")
+    
+    # 3. Arrancamos el bucle automático para que se actualice cada 30 minutos
     threading.Thread(target=bucle_actualizacion, daemon=True).start()
-    print("🤖 Bot listo: Anti-cuelgues + Rutas Rápidas Google Maps + HTML...")
+    
+    # 4. Arrancamos Telegram
+    print("🤖 Bot conectado a Telegram y listo para recibir mensajes.")
     bot.infinity_polling()
