@@ -5,289 +5,265 @@ import time
 import math
 import os
 import threading
+import urllib3
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# 1. Configuración básica y Seguridad
-TOKEN = os.environ.get('TELEGRAM_TOKEN')
+# Configuración de seguridad
+urllib3.disable_warnings()
 
+TOKEN = os.environ.get('TELEGRAM_TOKEN')
 if not TOKEN:
-    print("¡ERROR! No se ha encontrado el Token. Asegúrate de configurar la variable TELEGRAM_TOKEN.")
+    print("❌ ERROR: No se detectó TELEGRAM_TOKEN.")
     exit()
 
 bot = telebot.TeleBot(TOKEN)
 API_URL = "https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/"
 
-# 2. Sistema de Caché y Estado
+# Memoria del bot
 cache = {'datos': None, 'ultima_actualizacion': 0}
-TIEMPO_CACHE = 1800 # 30 minutos
-
-# Diccionario para recordar las búsquedas y poder paginar
+TIEMPO_CACHE = 1800 
 busquedas_usuarios = {}
 
-import urllib3
-urllib3.disable_warnings() # Esto evita que los logs se llenen de advertencias por el verify=False
+# --- 1. GEOLOCALIZACIÓN (Para texto) ---
+def obtener_coordenadas(direccion, limite=5):
+    # Ahora pedimos hasta 5 resultados en lugar de 1
+    url = f"https://nominatim.openstreetmap.org/search?q={direccion}, España&format=json&limit={limite}"
+    headers = {'User-Agent': f'GasolinerasBot_Final_{TOKEN[:5]}'}
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        data = r.json()
+        if data:
+            resultados = []
+            for item in data:
+                # Acortamos el display_name para que no sea inmenso
+                nombre_corto = item.get('display_name', '').replace(', España', '')
+                resultados.append({
+                    'lat': float(item['lat']),
+                    'lon': float(item['lon']),
+                    'nombre': nombre_corto
+                })
+            return resultados
+    except Exception as e:
+        print(f"❌ Error de Geocoding: {e}")
+    return None
 
-def obtener_datos():
-    """Descarga los datos solo si la caché ha caducado"""
-    tiempo_actual = time.time()
-    if cache['datos'] is None or (tiempo_actual - cache['ultima_actualizacion'] > TIEMPO_CACHE):
-        print("Descargando datos del Ministerio... ⏳ (Puede tardar hasta 60s)")
-        try:
-            # Disfrazamos la petición al máximo para que el Ministerio crea que somos un navegador real
-            cabeceras = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'es-ES,es;q=0.9',
-                'Connection': 'keep-alive',
-                'Referer': 'https://geoportalgasolineras.es/'
-            }
-            
-            # AUMENTAMOS EL TIMEOUT A 60 SEGUNDOS
-            respuesta = requests.get(API_URL, headers=cabeceras, verify=False, timeout=60)
-            
-            # Comprobamos que la respuesta es 200 (OK)
-            if respuesta.status_code == 200:
-                cache['datos'] = respuesta.json().get('ListaEESSPrecio', [])
-                cache['ultima_actualizacion'] = tiempo_actual
-                print("¡Datos descargados con éxito! ✅")
-            else:
-                print(f"❌ La API devolvió un error HTTP: {respuesta.status_code}")
-                return None
-                
-        except requests.exceptions.Timeout:
-            print("❌ Error: El servidor del Ministerio ha tardado más de 60 segundos en responder (Timeout).")
-            return None
-        except Exception as e:
-            # Si falla, imprimimos el error real en la consola de Render
-            print(f"❌ Error técnico al conectar: {e}")
-            return None
-            
-    return cache['datos']
-    
-def limpiar_precio(precio_str):
-    if not precio_str:
-        return float('inf')
-    return float(precio_str.replace(',', '.'))
+# --- 2. GESTIÓN DE DATOS ---
+def actualizar_datos_ministerio():
+    try:
+        print("📥 Descargando/Actualizando base de datos del Ministerio... ⏳")
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(API_URL, headers=headers, verify=False, timeout=120)
+        if r.status_code == 200:
+            cache['datos'] = r.json().get('ListaEESSPrecio', [])
+            cache['ultima_actualizacion'] = time.time()
+            print(f"✅ Datos cargados con éxito: {len(cache['datos'])} estaciones.")
+            return True
+    except Exception as e:
+        print(f"❌ Error conectando con el Ministerio: {e}")
+    return False
 
+def bucle_actualizacion():
+    while True:
+        # Duerme primero, ya que la primera descarga se hace fuera del bucle
+        time.sleep(TIEMPO_CACHE)
+        actualizar_datos_ministerio()
+
+# --- 3. CÁLCULO DISTANCIA ---
 def calcular_distancia(lat1, lon1, lat2, lon2):
     R = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (math.sin(dlat / 2)**2 + 
-         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2)
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
+    dlat, dlon = math.radians(lat2-lat1), math.radians(lon2-lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1-a)))
 
-# 4. Manejo de Comandos
-@bot.message_handler(commands=['start', 'help'])
-def enviar_bienvenida(message):
-    texto = ("¡Hola! ⛽️ Soy tu asistente de gasolina.\n\n"
-             "Envíame el nombre de tu **municipio** o tu **ubicación actual** (usando el clip 📎 de Telegram).")
-    bot.reply_to(message, texto, parse_mode="Markdown")
-
-# 5. Recibir Datos 
-@bot.message_handler(content_types=['text'])
-def recibir_municipio(message):
-    busquedas_usuarios[message.chat.id] = {'tipo': 'municipio', 'valor': message.text.upper()}
-    preguntar_combustible(message.chat.id)
-
-@bot.message_handler(content_types=['location'])
-def recibir_ubicacion(message):
-    busquedas_usuarios[message.chat.id] = {
-        'tipo': 'ubicacion', 
-        'lat': message.location.latitude, 
-        'lon': message.location.longitude
-    }
+# --- 4. MENÚS ---
+def enviar_menu_distancia(chat_id, titulo="📍 Ubicación recibida"):
     markup = InlineKeyboardMarkup()
     markup.add(
         InlineKeyboardButton("📍 10 km", callback_data="dist_10"),
         InlineKeyboardButton("📍 20 km", callback_data="dist_20"),
         InlineKeyboardButton("📍 30 km", callback_data="dist_30")
     )
-    bot.send_message(message.chat.id, "¿En qué radio de distancia busco?", reply_markup=markup)
+    bot.send_message(chat_id, f"{titulo}\n\n¿A qué distancia máxima quieres buscar?", 
+                     reply_markup=markup, parse_mode="Markdown")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('dist_'))
-def guardar_distancia(call):
-    chat_id = call.message.chat.id
-    if chat_id not in busquedas_usuarios:
-        bot.answer_callback_query(call.id, "Búsqueda caducada.")
-        return
-    
-    distancia = float(call.data.split('_')[1])
-    busquedas_usuarios[chat_id]['distancia_max'] = distancia
-    preguntar_combustible(chat_id, call.message.message_id)
-
-# 6. Preguntar Combustible 
 def preguntar_combustible(chat_id, message_id=None):
     markup = InlineKeyboardMarkup()
     markup.add(
         InlineKeyboardButton("⛽️ 95", callback_data="fuel_Precio Gasolina 95 E5"),
-        InlineKeyboardButton("🚀 98", callback_data="fuel_Precio Gasolina 98 E5"),
-        InlineKeyboardButton("🛢 Diésel", callback_data="fuel_Precio Gasoleo A")
+        InlineKeyboardButton("🛢 Diésel", callback_data="fuel_Precio Gasoleo A"),
+        InlineKeyboardButton("🚀 98", callback_data="fuel_Precio Gasolina 98 E5")
     )
-    
-    texto = "¿Qué combustible utilizas?"
+    txt = "Selecciona el combustible:"
     if message_id:
-        bot.edit_message_text(texto, chat_id=chat_id, message_id=message_id, reply_markup=markup)
+        bot.edit_message_text(txt, chat_id=chat_id, message_id=message_id, reply_markup=markup)
     else:
-        bot.send_message(chat_id, texto, reply_markup=markup)
+        bot.send_message(chat_id, txt, reply_markup=markup)
 
-# 7. Procesar Búsqueda y Preparar Paginación
-@bot.callback_query_handler(func=lambda call: call.data.startswith('fuel_'))
-def procesar_busqueda(call):
-    chat_id = call.message.chat.id
-    if chat_id not in busquedas_usuarios:
-        bot.answer_callback_query(call.id, "Búsqueda caducada. Envía tu ubicación o municipio de nuevo.")
-        return
+# --- 5. RECEPCIÓN ---
+@bot.message_handler(commands=['start', 'help'])
+def bienvenida(message):
+    texto = """¡Hola! ⛽️ Soy tu buscador de gasolineras baratas.
 
-    busqueda = busquedas_usuarios[chat_id]
-    tipo_combustible = call.data.replace('fuel_', '')
+Puedes enviarme:
+1. 📍 Tu <b>ubicación actual</b> (usando el clip 📎 de Telegram).
+2. 🏠 Una <b>calle o sitio</b> (ej: <i>Gran Vía, Madrid</i>).
+3. 🏙 Un <b>municipio</b> (ej: <i>Sevilla</i>)."""
+    bot.reply_to(message, texto, parse_mode="HTML")
     
-    if "95" in tipo_combustible:
-        busqueda['nombre_combustible'] = "Gasolina 95"
-    elif "98" in tipo_combustible:
-        busqueda['nombre_combustible'] = "Gasolina 98"
-    else:
-        busqueda['nombre_combustible'] = "Diésel"
+@bot.message_handler(content_types=['location', 'venue'])
+def recibir_ubicacion_gps(message):
+    chat_id = message.chat.id
+    if message.location:
+        lat, lon = message.location.latitude, message.location.longitude
+    elif message.venue:
+        lat, lon = message.venue.location.latitude, message.venue.location.longitude
     
-    bot.edit_message_text("Descargando y calculando los mejores precios... ⏳", chat_id=chat_id, message_id=call.message.message_id)
+    busquedas_usuarios[chat_id] = {'tipo': 'gps', 'lat': lat, 'lon': lon}
+    enviar_menu_distancia(chat_id, "📍 *Ubicación detectada correctamente*")
+
+@bot.message_handler(content_types=['text'])
+def recibir_texto(message):
+    chat_id = message.chat.id
+    texto = message.text
+    bot.send_chat_action(chat_id, 'find_location')
     
-    datos = obtener_datos()
-    if not datos:
-        bot.edit_message_text("❌ Error de conexión con el Ministerio. Por favor, inténtalo de nuevo en unos minutos.", chat_id=chat_id, message_id=call.message.message_id)
-        return
-
-    gasolineras = []
+    resultados = obtener_coordenadas(texto)
     
-    # Filtrar datos
-    for estacion in datos:
-        precio = limpiar_precio(estacion[tipo_combustible])
-        if precio == float('inf'):
-            continue
-            
-        # Extraer coordenadas para crear el enlace a Google Maps
-        try:
-            lat_est = float(estacion['Latitud'].replace(',', '.'))
-            lon_est = float(estacion['Longitud (WGS84)'].replace(',', '.'))
-            # Generamos la URL oficial de búsqueda de Google Maps
-            map_url = f"https://www.google.com/maps/search/?api=1&query={lat_est},{lon_est}"
-        except:
-            map_url = None
-            
-        if busqueda['tipo'] == 'municipio':
-            if estacion['Municipio'] == busqueda['valor']:
-                gasolineras.append({
-                    'direccion': estacion['Dirección'], 
-                    'rotulo': estacion['Rótulo'], 
-                    'precio': precio,
-                    'map_url': map_url
-                })
-                
-        elif busqueda['tipo'] == 'ubicacion':
-            try:
-                distancia = calcular_distancia(busqueda['lat'], busqueda['lon'], lat_est, lon_est)
-                
-                if distancia <= busqueda['distancia_max']:
-                    gasolineras.append({
-                        'direccion': estacion['Dirección'], 
-                        'rotulo': estacion['Rótulo'], 
-                        'precio': precio, 
-                        'distancia': distancia,
-                        'map_url': map_url
-                    })
-            except:
-                continue
-
-    # Ordenar y guardar en memoria para la paginación
-    gasolineras.sort(key=lambda x: x['precio'])
-    busqueda['resultados_completos'] = gasolineras
-    
-    mostrar_pagina(chat_id, call.message.message_id, pagina=0)
-
-# 8. Función para mostrar páginas
-def mostrar_pagina(chat_id, message_id, pagina):
-    busqueda = busquedas_usuarios.get(chat_id)
-    resultados = busqueda.get('resultados_completos', [])
-    
-    if not resultados:
-        bot.edit_message_text("No he encontrado gasolineras con esos criterios.", chat_id=chat_id, message_id=message_id)
-        return
-
-    elementos_por_pagina = 5
-    total_paginas = math.ceil(len(resultados) / elementos_por_pagina)
-    inicio = pagina * elementos_por_pagina
-    fin = inicio + elementos_por_pagina
-    resultados_pagina = resultados[inicio:fin]
-
-    if busqueda['tipo'] == 'municipio':
-        titulo = f"en **{busqueda['valor']}**"
-    else:
-        titulo = f"a menos de {int(busqueda['distancia_max'])}km"
-
-    texto_final = f"Top de {busqueda['nombre_combustible']} {titulo} (Pág {pagina+1}/{total_paginas}):\n\n"
-    
-    for i, g in enumerate(resultados_pagina, start=inicio+1):
-        # Si tenemos URL de mapa, hacemos el título clickable
-        if g.get('map_url'):
-            texto_estacion = f"{i}. 🏪 [{g['rotulo']}]({g['map_url']}) ({g['direccion']})\n💶 Precio: **{g['precio']}€**"
+    if resultados:
+        if len(resultados) == 1:
+            # Si solo hay una coincidencia, vamos directos
+            busquedas_usuarios[chat_id] = {'tipo': 'gps', 'lat': resultados[0]['lat'], 'lon': resultados[0]['lon']}
+            enviar_menu_distancia(chat_id, f"📍 He localizado: *{resultados[0]['nombre']}*")
         else:
-            texto_estacion = f"{i}. 🏪 **{g['rotulo']}** ({g['direccion']})\n💶 Precio: **{g['precio']}€**"
+            # Si hay varias, guardamos las opciones y preguntamos al usuario
+            busquedas_usuarios[chat_id] = {'tipo': 'seleccion', 'opciones': resultados}
+            markup = InlineKeyboardMarkup()
+            for i, res in enumerate(resultados):
+                # Limitamos el texto del botón a ~40 caracteres para que no se rompa la interfaz
+                btn_txt = res['nombre'][:40] + "..." if len(res['nombre']) > 40 else res['nombre']
+                markup.add(InlineKeyboardButton(f"🏠 {btn_txt}", callback_data=f"addr_{i}"))
             
-        if 'distancia' in g:
-            texto_estacion += f" | 📏 {g['distancia']:.1f} km"
-            
-        texto_final += texto_estacion + "\n\n"
+            bot.send_message(chat_id, f"He encontrado varias opciones para *{texto}*.\n¿Cuál es la correcta?", reply_markup=markup, parse_mode="Markdown")
+    else:
+        # Si no hay coordenadas (falla Nominatim o es muy raro), busca por municipio/calle como antes
+        busquedas_usuarios[chat_id] = {'tipo': 'texto', 'valor': texto.upper()}
+        preguntar_combustible(chat_id)
 
-    # Botones de paginación
-    markup = InlineKeyboardMarkup()
-    botones = []
-    if pagina > 0:
-        botones.append(InlineKeyboardButton("⬅️ Anterior", callback_data=f"page_{pagina-1}"))
-    if pagina < total_paginas - 1:
-        botones.append(InlineKeyboardButton("Siguiente ➡️", callback_data=f"page_{pagina+1}"))
-    
-    if botones:
-        markup.add(*botones)
+# --- 6. PROCESAMIENTO ---
 
-    # disable_web_page_preview=True es vital para que Telegram no genere vistas previas gigantes de Google Maps
-    bot.edit_message_text(
-        texto_final, 
-        chat_id=chat_id, 
-        message_id=message_id, 
-        parse_mode="Markdown", 
-        reply_markup=markup,
-        disable_web_page_preview=True 
-    )
-
-# 9. Escuchar clicks de Paginación
-@bot.callback_query_handler(func=lambda call: call.data.startswith('page_'))
-def cambiar_pagina(call):
+# NUEVO: Manejador para la selección de dirección
+@bot.callback_query_handler(func=lambda call: call.data.startswith('addr_'))
+def seleccionar_direccion(call):
     chat_id = call.message.chat.id
-    if chat_id not in busquedas_usuarios:
-        bot.answer_callback_query(call.id, "Búsqueda caducada.")
-        return
-        
-    nueva_pagina = int(call.data.split('_')[1])
-    mostrar_pagina(chat_id, call.message.message_id, nueva_pagina)
-
-# 10. Servidor Web Falso (Para que Render nos deje usar la capa gratuita)
-class Manejador(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-        self.wfile.write(b"El bot esta funcionando OK")
-
-def iniciar_servidor():
-    puerto = int(os.environ.get("PORT", 8080)) 
-    servidor = HTTPServer(('0.0.0.0', puerto), Manejador)
-    servidor.serve_forever()
-
-# 11. Iniciar Bot
-if __name__ == '__main__':
-    # Arrancamos el servidor web falso para engañar a Render
-    threading.Thread(target=iniciar_servidor, daemon=True).start()
     
-    # Mantiene el script vivo y escuchando mensajes de Telegram
-    print("🤖 Servidor iniciado. Bot de Telegram escuchando...")
+    # Validar que la sesión existe y está en estado de selección
+    if chat_id not in busquedas_usuarios or busquedas_usuarios[chat_id].get('tipo') != 'seleccion':
+        bot.answer_callback_query(call.id, "❌ Sesión caducada. Vuelve a escribir la dirección.")
+        return
+
+    idx = int(call.data.split('_')[1])
+    opciones = busquedas_usuarios[chat_id]['opciones']
+    
+    if idx < len(opciones):
+        seleccion = opciones[idx]
+        busquedas_usuarios[chat_id] = {'tipo': 'gps', 'lat': seleccion['lat'], 'lon': seleccion['lon']}
+        
+        # Editamos el mensaje original para limpiar la botonera
+        bot.edit_message_text(f"✅ Has seleccionado:\n*{seleccion['nombre']}*", 
+                              chat_id=chat_id, message_id=call.message.message_id, parse_mode="Markdown")
+        
+        # Pasamos al menú de distancia
+        enviar_menu_distancia(chat_id)
+    else:
+        bot.answer_callback_query(call.id, "❌ Error al seleccionar la dirección.")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('dist_'))
+def set_distancia(call):
+    chat_id = call.message.chat.id
+    if chat_id in busquedas_usuarios:
+        busquedas_usuarios[chat_id]['radio'] = float(call.data.split('_')[1])
+        preguntar_combustible(chat_id, call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('fuel_'))
+def buscar(call):
+    chat_id = call.message.chat.id
+    if chat_id not in busquedas_usuarios: return
+
+    tipo_f = call.data.replace('fuel_', '')
+    bot.edit_message_text("🔍 Buscando precios...", chat_id=chat_id, message_id=call.message.message_id)
+    
+    datos = cache['datos']
+    if not datos:
+        bot.edit_message_text("❌ Datos no listos. Prueba en unos minutos.", chat_id=chat_id, message_id=call.message.message_id)
+        return
+
+    b = busquedas_usuarios[chat_id]
+    encontradas = []
+
+    for est in datos:
+        try:
+            p = float(est[tipo_f].replace(',', '.'))
+            lat_e = float(est['Latitud'].replace(',', '.'))
+            lon_e = float(est['Longitud (WGS84)'].replace(',', '.'))
+            
+            if b['tipo'] == 'gps':
+                dist = calcular_distancia(b['lat'], b['lon'], lat_e, lon_e)
+                if dist <= b['radio']:
+                    encontradas.append({'r': est['Rótulo'], 'p': p, 'd': est['Dirección'], 'dist': dist, 'lat': lat_e, 'lon': lon_e})
+            else:
+                if b['valor'] in est['Municipio'].upper() or b['valor'] in est['Dirección'].upper():
+                    encontradas.append({'r': est['Rótulo'], 'p': p, 'd': est['Dirección'], 'lat': lat_e, 'lon': lon_e})
+        except: continue
+
+    encontradas.sort(key=lambda x: x['p'])
+    b['res'] = encontradas
+    mostrar_resultados(chat_id, call.message.message_id, 0)
+
+def mostrar_resultados(chat_id, mid, pag):
+    res = busquedas_usuarios[chat_id].get('res', [])
+    if not res:
+        bot.edit_message_text("❌ No hay gasolineras en ese radio con ese combustible.", chat_id=chat_id, message_id=mid)
+        return
+
+    items = 5
+    total = math.ceil(len(res) / items)
+    lista = res[pag*items : (pag+1)*items]
+    
+    txt = f"⛽️ *Resultados* (Pág {pag+1}/{total}):\n\n"
+    for i, g in enumerate(lista, 1):
+        dist = f" | 📏 {g['dist']:.1f}km" if 'dist' in g else ""
+        map_link = f"https://www.google.com/maps/search/?api=1&query={g['lat']},{g['lon']}"
+        txt += f"{i}. *{g['p']}€* - [{g['r']}]({map_link}){dist}\n📍 _{g['d']}_\n\n"
+
+    markup = InlineKeyboardMarkup()
+    btns = []
+    if pag > 0: btns.append(InlineKeyboardButton("⬅️", callback_data=f"page_{pag-1}"))
+    if pag < total - 1: btns.append(InlineKeyboardButton("➡️", callback_data=f"page_{pag+1}"))
+    if btns: markup.add(*btns)
+    
+    bot.edit_message_text(txt, chat_id=chat_id, message_id=mid, parse_mode="Markdown", reply_markup=markup, disable_web_page_preview=True)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('page_'))
+def paginar(call):
+    mostrar_resultados(call.message.chat.id, call.message.message_id, int(call.data.split('_')[1]))
+
+# --- 7. WEB SERVER Y ARRANQUE ---
+class Health(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
+
+if __name__ == '__main__':
+    # Lanzamos el servidor de HealthCheck para evitar caídas en el hosting
+    threading.Thread(target=lambda: HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 8080))), Health).serve_forever(), daemon=True).start()
+    
+    # NUEVO: Forzamos la descarga inicial ANTES de arrancar el bot
+    print("⏳ Iniciando: Descargando datos iniciales del Ministerio...")
+    while not actualizar_datos_ministerio():
+        print("⚠️ Fallo al descargar. Reintentando en 10 segundos...")
+        time.sleep(10)
+    
+    # Una vez descargado, lanzamos el hilo que actualizará en segundo plano cada 30 min
+    threading.Thread(target=bucle_actualizacion, daemon=True).start()
+    
+    print("🤖 Bot listo y escuchando mensajes...")
     bot.infinity_polling()
